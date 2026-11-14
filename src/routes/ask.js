@@ -1,6 +1,6 @@
 // POST /v1/session, POST /v1/ask, POST /v1/feedback (docs/SDD.md, "Answering", "Abuse").
 import { json, fail, readJson, utcDay, secondsToMidnight, errText } from "../lib/http.js";
-import { sha256Hex, sortableId } from "../lib/crypto.js";
+import { sha256Hex, randomToken } from "../lib/crypto.js";
 import { normalizeQuestion, redact, clean, tokens, snippet } from "../lib/text.js";
 import { originAllowed, verifyTurnstile, issueSession, checkSession, checkApiKey, ipHash, minuteOk, countDaily } from "../lib/guard.js";
 import { retrieve, isWeak, pages } from "../lib/retrieve.js";
@@ -114,7 +114,8 @@ export async function handleAsk(request, app, ctx) {
 
   const history = body.value.history && typeof body.value.history === "object" ? { question: clean(String(body.value.history.question ?? "")).slice(0, 500), answer: clean(String(body.value.history.answer ?? "")).slice(0, 400) } : null;
   const result = await answerQuestion(env, cfg, question, history, ctx);
-  const id = sortableId("q_", now);
+  // 128 random bits: an id handed to the browser for feedback must not be guessable.
+  const id = `q_${randomToken()}`;
   const optOut = body.value.log === false || request.headers.get("Sec-GPC") === "1" || !cfg.logQuestions;
 
   // Log (unless opted out) and cache, in one batch.
@@ -201,14 +202,23 @@ export async function answerQuestion(env, cfg, question, history, ctx) {
 
   const lean = resv.mode === "lean";
   const useModel = resv.mode === "full" || lean;
-  const r = await retrieve(env, cfg, question, { useVector: useModel, maxChunks: lean ? cfg.retrieval.leanChunks : cfg.retrieval.maxChunks, maxTokens: lean ? cfg.retrieval.leanContextTokens : cfg.retrieval.maxContextTokens });
+  let r;
+  try {
+    r = await retrieve(env, cfg, question, { useVector: useModel, maxChunks: lean ? cfg.retrieval.leanChunks : cfg.retrieval.maxChunks, maxTokens: lean ? cfg.retrieval.leanContextTokens : cfg.retrieval.maxContextTokens });
+  } catch (err) {
+    release(0); // never leave a hold to settle at its estimate
+    throw err;
+  }
+  // Only a complete, full-mode retrieval is cached: a degraded one (Vectorize or embeddings down) or a
+  // lean answer would otherwise be served to everyone for 24 hours.
+  const cacheOk = resv.mode === "full" && r.vectorOk && !r.aiError;
   let spent = r.neurons;
   if (r.aiError) await keeper.aiFailed(r.aiError.quota, now).catch(() => {});
 
   // Weak retrieval: "I don't know", without a model call.
   if (isWeak(r, cfg)) {
     release(spent);
-    return { response: idk(cfg, r.chunks, useModel ? resv.mode : "search"), chunkIds: [], neurons: spent, cacheable: useModel, cacheKey, docsVersion };
+    return { response: idk(cfg, r.chunks, useModel ? resv.mode : "search"), chunkIds: [], neurons: spent, cacheable: cacheOk, cacheKey, docsVersion };
   }
   if (!useModel || r.aiError?.quota) {
     release(spent);
@@ -228,12 +238,12 @@ export async function answerQuestion(env, cfg, question, history, ctx) {
   spent += g.neurons;
   release(spent);
   const c = checkOutput(g.text, r.chunks.length);
-  if (c.idk) return { response: idk(cfg, r.chunks, resv.mode), chunkIds: [], neurons: spent, cacheable: true, cacheKey, docsVersion };
+  if (c.idk) return { response: idk(cfg, r.chunks, resv.mode), chunkIds: [], neurons: spent, cacheable: cacheOk, cacheKey, docsVersion };
   // Links: only the cited sources' URLs, from D1 metadata.
   const sources = c.cited.map((n) => source(n, r.chunks[n - 1]));
   const response = { answer: c.answer, sources, confidence: c.confidence, mode: resv.mode };
   if (c.confidence === "low") response.note = NO_CITE_NOTE;
-  return { response, chunkIds: r.chunks.map((x) => x.id), neurons: spent, cacheable: true, cacheKey, docsVersion };
+  return { response, chunkIds: r.chunks.map((x) => x.id), neurons: spent, cacheable: cacheOk, cacheKey, docsVersion };
 }
 
 function source(n, c, withSnippet = false) {
@@ -256,9 +266,15 @@ export async function handleFeedback(request, app) {
   const { env } = app;
   const cors = corsHeaders(env, request.headers.get("Origin"));
   const body = await readJson(request, 512);
-  if (!body.ok || typeof body.value.id !== "string" || typeof body.value.helpful !== "boolean" || !/^q_[a-z0-9]{18}$/.test(body.value.id)) return withCors(fail(400, "bad_request", "Send JSON {id, helpful}."), cors);
+  if (!body.ok || typeof body.value.id !== "string" || typeof body.value.helpful !== "boolean" || !/^q_[A-Za-z0-9_-]{22}$/.test(body.value.id)) return withCors(fail(400, "bad_request", "Send JSON {id, helpful}."), cors);
   const who = await caller(request, app, cors);
   if (who instanceof Response) return who;
+  // Feedback is rate limited like questions: the minute window and a daily counter.
+  const now = clock.now();
+  const key = who.kind === "session" ? `ip:${await ipHash(env, clientIp(request), now)}` : `k:${who.name}`;
+  if (!minuteOk(key, now, app.cfg.limits.perIpPerMinute)) return withCors(fail(429, "rate_limited", "Too many requests; try again later.", { "Retry-After": "60" }), cors);
+  const c = await countDaily(env.DB, utcDay(now), [{ key: `fb:${key}`, limit: app.cfg.limits.perIpPerDay }]);
+  if (c.over) return withCors(fail(429, "rate_limited", "Too many requests; try again later.", { "Retry-After": String(secondsToMidnight(now)) }), cors);
   await env.DB.prepare("UPDATE asks SET helpful = ? WHERE id = ? AND helpful IS NULL").bind(body.value.helpful ? 1 : 0, body.value.id).run();
   return withCors(new Response(null, { status: 204 }), cors);
 }

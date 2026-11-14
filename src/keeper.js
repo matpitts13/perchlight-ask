@@ -40,7 +40,8 @@ export const INGEST_RETRY = [HOUR, 6 * HOUR];
 export const DRAFT_RETRY = [5 * MIN, 30 * MIN, 2 * HOUR];
 export const PURGE_BATCH = 500;
 export const MAX_PURGE_RUNS = 10;
-const QUERY_BUDGET = 45; // D1 statements per invocation on Free (assumed to count per statement)
+const QUERY_BUDGET = 45;
+export const MAX_DOC_STATEMENTS = 25; // ~350 chunks: always fits a fresh run's D1 statements // D1 statements per invocation on Free (assumed to count per statement)
 
 function defaultHot() {
   return { cfgHash: null, run: null, lastRunAt: null, lastError: null, errors: 0, lastPurgeDay: null, purgeRuns: 0, purgeMore: false, lastDigestAt: 0, heartbeatAt: 0, draftsBlockedUntil: 0 };
@@ -251,7 +252,7 @@ export function keeperClass(rawConfig) {
       try {
         const reads = await this.d1(budget, [
           { sql: "SELECT * FROM sources", params: [] },
-          { sql: "SELECT id, requested_action, status FROM drafts WHERE requested_action IS NOT NULL LIMIT 20", params: [] },
+          { sql: "SELECT id, requested_action, status FROM drafts WHERE requested_action IS NOT NULL LIMIT 8", params: [] },
           { sql: "SELECT COUNT(*) AS n, MIN(next_at) AS at FROM emails WHERE status = 'queued'", params: [] },
           { sql: "SELECT MIN(next_at) AS at FROM deliveries WHERE status IN ('pending', 'retry', 'sending')", params: [] },
           { sql: "SELECT COUNT(*) AS n FROM drafts WHERE notified = 0 AND status = 'new'", params: [] },
@@ -329,7 +330,7 @@ export function keeperClass(rawConfig) {
       const stmts = [];
       for (const s of sources) {
         const a = s.requested_action;
-        if (!a) continue;
+        if (!a || stmts.length >= 10) continue;
         if (a === "reingest") stmts.push({ sql: "UPDATE sources SET requested_action = NULL, next_at = 0, fail_count = 0, status = CASE WHEN paused = 1 THEN status ELSE 'new' END WHERE id = ?", params: [s.id] });
         else if (a === "pause") {
           stmts.push({ sql: "UPDATE sources SET requested_action = NULL, paused = 1, status = 'paused' WHERE id = ?", params: [s.id] });
@@ -369,7 +370,7 @@ export function keeperClass(rawConfig) {
       const day = utcDay(now);
       if (h.lastPurgeDay === day && !h.purgeMore) return 0;
       if (h.lastPurgeDay !== day) h.purgeRuns = 0;
-      if (!fits(budget, 1, ALARM_RESERVE + 6)) return 0;
+      if (!fits(budget, 1, ALARM_RESERVE + 6) || this.queriesLeft(budget) < 8 + 10) return 0;
       const cut = now - cfg.retentionDays * 86400_000;
       const lim = PURGE_BATCH;
       const del = (table, col, value, key = "id") => ({ sql: `DELETE FROM ${table} WHERE ${key} IN (SELECT ${key} FROM ${table} WHERE ${col} < ? LIMIT ${lim})`, params: [value] });
@@ -500,7 +501,7 @@ export function keeperClass(rawConfig) {
         }
         h.lastDigestAt = now;
       }
-      if (!fits(budget, 3, ALARM_RESERVE)) return 0;
+      if (!fits(budget, 3, ALARM_RESERVE) || this.queriesLeft(budget) < 12) return 0;
       const due = (await this.d1(budget, [{ sql: "SELECT * FROM deliveries WHERE (status IN ('pending', 'retry') AND next_at <= ?1) OR (status = 'sending' AND next_at <= ?2) ORDER BY next_at LIMIT 5", params: [now, now - 10 * MIN] }]))[0].results;
       let sent = 0;
       for (const d of due) {
@@ -546,7 +547,8 @@ export function keeperClass(rawConfig) {
 
     async ingestStep(cfg, h, sources, now, budget) {
       if (!h.run) {
-        const due = sources.filter((s) => !s.paused && s.next_at <= now && !["config_error", "running"].includes(s.status)).sort((a, b) => a.next_at - b.next_at)[0];
+        // With no run in memory, a "running" row is stale (a lost write or eviction): it's due again.
+        const due = sources.filter((s) => !s.paused && s.next_at <= now && s.status !== "config_error").sort((a, b) => a.next_at - b.next_at)[0];
         if (!due) return null;
         if (!fits(budget, 3, ALARM_RESERVE)) return null;
         const src = due.status === "removed" ? { id: due.id, kind: "removed" } : due.kind === "upload" ? { id: "upload", kind: "upload" } : cfg.sources.find((s) => s.id === due.id);
@@ -554,7 +556,8 @@ export function keeperClass(rawConfig) {
         const runId = sortableId("run_", now);
         const r = await this.d1(budget, [
           { sql: "INSERT INTO ingest_runs (id, source_id, started_at, status) VALUES (?, ?, ?, 'running')", params: [runId, due.id, now] },
-          { sql: "UPDATE sources SET status = 'running', last_run_id = ? WHERE id = ?", params: [runId, due.id] },
+          // next_at moves to the normal schedule now; a re-ingest request during the run sets it back to 0 and completeRun keeps that.
+          { sql: "UPDATE sources SET status = 'running', last_run_id = ?, next_at = ? WHERE id = ?", params: [runId, now + (due.every_ms || 86400_000), due.id] },
           { sql: "SELECT COALESCE(SUM(tokens), 0) AS t FROM docs WHERE deleted_at IS NULL AND status = 'ok'", params: [] },
           { sql: "SELECT COUNT(*) AS n FROM chunks WHERE embedded_at IS NOT NULL", params: [] },
         ]);
@@ -569,6 +572,8 @@ export function keeperClass(rawConfig) {
         await this.abortRun(h, "source removed from ask.json", now, budget);
         return { phase: "aborted" };
       }
+      const sig = () => [run.phase, run.done, run.embedded, run.deleted, run.sitemaps?.pages ?? 0, run.sitemaps?.stack?.length ?? 0, this.count("queue"), this.count("vdel")].join("|");
+      const before = sig();
       try {
         let bytes = 0;
         for (let guard = 0; guard < 200 && h.run; guard++) {
@@ -597,6 +602,14 @@ export function keeperClass(rawConfig) {
         if (err instanceof BudgetOut) return { phase: run.phase };
         await this.failRun(h, run, err, now, budget);
         return { phase: "failed", error: errText(err) };
+      }
+      if (h.run && run.pausedUntil <= now) {
+        // A run that makes no progress for 5 runs in a row fails (and backs off) instead of re-arming every second.
+        run.stalls = sig() === before ? (run.stalls ?? 0) + 1 : 0;
+        if (run.stalls >= 5) {
+          await this.failRun(h, run, new Error(`ingest made no progress in 5 runs (phase ${run.phase})`), now, budget);
+          return { phase: "failed" };
+        }
       }
       if (h.run) {
         const progress = run.total ? Math.min(99, Math.round((run.done / run.total) * 100)) : 0;
@@ -743,6 +756,15 @@ export function keeperClass(rawConfig) {
           await this.d1(budget, [{ sql: "INSERT INTO docs (id, source_id, path, url, title, etag, tokens, status, updated_at) VALUES (?, ?, ?, '', ?, NULL, ?, 'over_cap', ?) ON CONFLICT (id) DO UPDATE SET status = CASE WHEN docs.deleted_at IS NULL AND docs.status = 'ok' THEN docs.status ELSE 'over_cap' END, updated_at = excluded.updated_at", params: [id, src.id, item.path, String(doc.title).slice(0, 200), st.tokens, now] }]);
           run.overCap = (run.overCap ?? 0) + 1;
         } else {
+          if (st.stmts.length > MAX_DOC_STATEMENTS) {
+            // Too many chunks to store in one invocation's D1 statements: flagged and skipped, never retried in a loop.
+            await this.d1(budget, [{ sql: "INSERT INTO docs (id, source_id, path, url, title, etag, tokens, status, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, 'too_large', ?) ON CONFLICT (id) DO UPDATE SET status = CASE WHEN docs.deleted_at IS NULL AND docs.status = 'ok' THEN docs.status ELSE 'too_large' END, etag = excluded.etag, updated_at = excluded.updated_at", params: [id, src.id, item.path, String(doc.title).slice(0, 200), doc.etag ?? null, st.tokens, now] }]);
+            run.errors++;
+            run.lastDocError = `${item.path.slice(0, 120)}: too many chunks (split the page)`;
+            this.sql.exec("DELETE FROM queue WHERE path = ?", item.path);
+            run.done++;
+            continue;
+          }
           if (st.stmts.length > this.queriesLeft(budget) - 4) return { done: false, bytes };
           await this.d1(budget, st.stmts);
           for (const rid of st.removed) this.sql.exec("INSERT OR IGNORE INTO vdel (id) VALUES (?)", rid);
@@ -858,7 +880,7 @@ export function keeperClass(rawConfig) {
       } else {
         const every = run.kind === "upload" ? 365 * 86400_000 : (this.cfg.sources.find((s) => s.id === run.sourceId)?.everyMs ?? 86400_000);
         stmts.push({
-          sql: "UPDATE sources SET status = CASE WHEN paused = 1 THEN 'paused' ELSE 'ok' END, fail_count = 0, last_error = ?1, next_at = ?2, docs = (SELECT COUNT(*) FROM docs WHERE source_id = ?3 AND deleted_at IS NULL AND status = 'ok'), chunks = (SELECT COUNT(*) FROM chunks c JOIN docs d ON d.id = c.doc_id WHERE d.source_id = ?3 AND d.deleted_at IS NULL) WHERE id = ?3",
+          sql: "UPDATE sources SET status = CASE WHEN paused = 1 THEN 'paused' ELSE 'ok' END, fail_count = 0, last_error = ?1, next_at = CASE WHEN next_at = 0 THEN 0 ELSE ?2 END, docs = (SELECT COUNT(*) FROM docs WHERE source_id = ?3 AND deleted_at IS NULL AND status = 'ok'), chunks = (SELECT COUNT(*) FROM chunks c JOIN docs d ON d.id = c.doc_id WHERE d.source_id = ?3 AND d.deleted_at IS NULL) WHERE id = ?3",
           params: [err, now + every, run.sourceId],
         });
       }
@@ -903,7 +925,7 @@ export function keeperClass(rawConfig) {
       if (h.purgeMore) times.push(now + MIN);
       times.push(h.lastPurgeDay === utcDay(now) ? nextMidnight(now) + 5 * MIN : now + 1000);
       const r = await this.d1(budget, [
-        { sql: "SELECT MIN(next_at) AS at FROM sources WHERE paused = 0 AND status NOT IN ('config_error', 'running')", params: [] },
+        { sql: "SELECT MIN(next_at) AS at FROM sources WHERE paused = 0 AND status <> 'config_error'", params: [] },
         { sql: "SELECT MIN(next_at) AS at FROM emails WHERE status = 'queued'", params: [] },
         { sql: "SELECT MIN(CASE WHEN status = 'sending' THEN next_at + 600000 ELSE next_at END) AS at FROM deliveries WHERE status IN ('pending', 'retry', 'sending')", params: [] },
         { sql: "SELECT COUNT(*) AS n FROM drafts WHERE notified = 0 AND status = 'new'", params: [] },

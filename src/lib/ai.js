@@ -13,7 +13,7 @@ export class AIError extends Error {
 
 /** Whether an AI error looks like the daily neuron limit (wording isn't documented, so this is broad). */
 export function isQuotaError(err) {
-  return /neuron|quota|daily (free )?(allocation|limit)|exceeded|\b4006\b|rate.?limit|\b429\b/i.test(errText(err));
+  return /neuron|quota|daily (free )?(allocation|limit)|\b4006\b/i.test(errText(err));
 }
 
 function gatewayOpts(env) {

@@ -14,12 +14,11 @@ function tidy(md) {
   return String(md)
     .replace(/\r\n?/g, "\n")
     .replace(/^---\n[\s\S]*?\n---\n/, "")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/^(import|export)\s.+$/gm, "");
+    .replace(/<!--[\s\S]*?-->/g, "");
 }
 
 /** Sections: { path: string[], blocks: string[] }. A block is a paragraph or a whole code fence. */
-export function sections(md) {
+export function sections(md, { mdx = false } = {}) {
   const lines = tidy(md).split("\n");
   const out = [];
   const path = [];
@@ -48,6 +47,8 @@ export function sections(md) {
       para.push(line);
       continue;
     }
+    // MDX import/export lines (.mdx only, outside code fences) aren't content.
+    if (mdx && /^(import|export)\s/.test(line)) continue;
     const h = /^(#{1,3})\s+(.+?)\s*#*\s*$/.exec(line);
     if (h) {
       endPara();
@@ -101,9 +102,9 @@ function tail(text) {
  * Chunks of one document.
  * @returns {{ ordinal: number, headingPath: string, text: string, tokens: number }[]}
  */
-export function chunkMarkdown(md) {
+export function chunkMarkdown(md, opts = {}) {
   const out = [];
-  for (const s of sections(md)) {
+  for (const s of sections(md, opts)) {
     const headingPath = s.path.join(" › ");
     const blocks = s.blocks.flatMap(splitBlock);
     let acc = "";

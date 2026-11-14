@@ -44,11 +44,10 @@ export async function listGithub(env, src, budget, ownHost) {
     throw new FetchError("status", "GitHub tree: not JSON");
   }
   const prefix = src.path ? `${src.path}/` : "";
-  const files = (Array.isArray(data.tree) ? data.tree : [])
-    .filter((t) => t.type === "blob" && typeof t.path === "string" && t.path.startsWith(prefix) && src.exts.some((e) => t.path.toLowerCase().endsWith(e)) && (t.size ?? 0) <= MAX_GITHUB_FILE)
-    .slice(0, MAX_URLS)
-    .map((t) => ({ path: t.path, etag: String(t.sha) }));
-  return { files, truncated: data.truncated === true };
+  const all = (Array.isArray(data.tree) ? data.tree : []).filter((t) => t.type === "blob" && typeof t.path === "string" && t.path.startsWith(prefix) && src.exts.some((e) => t.path.toLowerCase().endsWith(e)) && (t.size ?? 0) <= MAX_GITHUB_FILE);
+  const files = all.slice(0, MAX_URLS).map((t) => ({ path: t.path, etag: String(t.sha) }));
+  // A capped listing isn't the whole truth either: treated like a truncated tree (nothing deleted).
+  return { files, truncated: data.truncated === true || all.length > MAX_URLS };
 }
 
 export function githubDocUrl(src, path) {
@@ -135,7 +134,7 @@ const ROWS_PER_INSERT = Math.floor(99 / CHUNK_COLS);
  */
 export async function docStatements({ sourceId, path, doc, existing, now }) {
   const id = await docId(sourceId, path);
-  const chunks = await chunkIds(sourceId, path, chunkMarkdown(doc.markdown));
+  const chunks = await chunkIds(sourceId, path, chunkMarkdown(doc.markdown, { mdx: String(path).toLowerCase().endsWith(".mdx") }));
   const contentHash = (await sha256Hex(doc.markdown)).slice(0, 40);
   const total = chunks.reduce((n, c) => n + c.tokens, 0);
   const stmts = [];

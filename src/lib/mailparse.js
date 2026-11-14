@@ -109,10 +109,33 @@ function firstText(headers, body, depth) {
 }
 
 /** Cheap HTML -> text for mail bodies (no HTMLRewriter in this hot path). */
+/** Removes <tag>…</tag> blocks in one linear pass (an unclosed tag drops the rest): no backtracking regex on untrusted mail. */
+export function stripBlocks(s, tags) {
+  const low = s.toLowerCase();
+  let out = "";
+  let at = 0;
+  for (;;) {
+    let best = -1;
+    let tag = null;
+    for (const t of tags) {
+      const i = low.indexOf(`<${t}`, at);
+      if (i >= 0 && (best < 0 || i < best)) {
+        best = i;
+        tag = t;
+      }
+    }
+    if (best < 0) return out + s.slice(at);
+    out += `${s.slice(at, best)} `;
+    const end = low.indexOf(`</${tag}`, best);
+    if (end < 0) return out;
+    const close = low.indexOf(">", end);
+    if (close < 0) return out;
+    at = close + 1;
+  }
+}
+
 export function mailHtmlToText(h) {
-  return String(h)
-    .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, " ")
+  return stripBlocks(String(h), ["script", "style", "head", "blockquote"])
     .replace(/<(br|\/p|\/div|\/li|\/tr|\/h\d)[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
@@ -163,7 +186,9 @@ export function parseMail(raw) {
 
 /** "Name <a@b>" -> "a@b" (lower-case). */
 export function addressOf(v) {
-  const m = /<([^<>\s]+@[^<>\s]+)>/.exec(String(v));
+  // The LAST <addr> is the real one: a display name can itself contain "<someone@else>".
+  const all = [...String(v).matchAll(/<([^<>\s]+@[^<>\s]+)>/g)];
+  const m = all[all.length - 1];
   const a = (m ? m[1] : String(v).trim().split(/\s+/)[0] ?? "").toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a) ? a : "";
 }
