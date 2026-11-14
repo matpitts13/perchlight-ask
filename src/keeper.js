@@ -41,7 +41,7 @@ export const DRAFT_RETRY = [5 * MIN, 30 * MIN, 2 * HOUR];
 export const PURGE_BATCH = 500;
 export const MAX_PURGE_RUNS = 10;
 const QUERY_BUDGET = 45;
-export const MAX_DOC_STATEMENTS = 25; // ~350 chunks: always fits a fresh run's D1 statements // D1 statements per invocation on Free (assumed to count per statement)
+export const MAX_DOC_STATEMENTS = 18; // ~250 chunks: leaves room for purge/deliveries in the same run // D1 statements per invocation on Free (assumed to count per statement)
 
 function defaultHot() {
   return { cfgHash: null, run: null, lastRunAt: null, lastError: null, errors: 0, lastPurgeDay: null, purgeRuns: 0, purgeMore: false, lastDigestAt: 0, heartbeatAt: 0, draftsBlockedUntil: 0 };
@@ -758,7 +758,7 @@ export function keeperClass(rawConfig) {
         } else {
           if (st.stmts.length > MAX_DOC_STATEMENTS) {
             // Too many chunks to store in one invocation's D1 statements: flagged and skipped, never retried in a loop.
-            await this.d1(budget, [{ sql: "INSERT INTO docs (id, source_id, path, url, title, etag, tokens, status, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, 'too_large', ?) ON CONFLICT (id) DO UPDATE SET status = CASE WHEN docs.deleted_at IS NULL AND docs.status = 'ok' THEN docs.status ELSE 'too_large' END, etag = excluded.etag, updated_at = excluded.updated_at", params: [id, src.id, item.path, String(doc.title).slice(0, 200), doc.etag ?? null, st.tokens, now] }]);
+            await this.d1(budget, [{ sql: "INSERT INTO docs (id, source_id, path, url, title, etag, tokens, status, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, 'too_large', ?) ON CONFLICT (id) DO UPDATE SET status = CASE WHEN docs.deleted_at IS NULL AND docs.status = 'ok' THEN docs.status ELSE 'too_large' END, etag = CASE WHEN docs.deleted_at IS NULL AND docs.status = 'ok' THEN docs.etag ELSE excluded.etag END, updated_at = excluded.updated_at", params: [id, src.id, item.path, String(doc.title).slice(0, 200), doc.etag ?? null, st.tokens, now] }]);
             run.errors++;
             run.lastDocError = `${item.path.slice(0, 120)}: too many chunks (split the page)`;
             this.sql.exec("DELETE FROM queue WHERE path = ?", item.path);

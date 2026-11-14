@@ -360,7 +360,7 @@ All open questions were **decided on 2026-11-12, as recommended** (the approval 
 10. **Sessions are counted in D1** (`rate` rows `s:<id>`) like the per-IP daily count; the per-IP minute window is isolate memory as written.
 11. **Re-ingest `every`** accepts `6h`, `12h`, `1d` and `7d`; the heartbeat is sent at most every 5 minutes; the Budget screen reads a `budget_days` mirror the Keeper writes every run.
 12. **Only full-mode answers from a complete retrieval are cached** (not lean answers, and not an "I don't know" produced while Vectorize or embeddings were down), so a degraded moment isn't served to everyone for 24 hours.
-13. **A doc that would need more than ~350 chunks** (25 D1 statements) is flagged `too_large` and skipped, so one huge page can't stall ingest; an ingest run that makes no progress for 5 alarm runs fails and backs off.
+13. **A doc that would need more than ~250 chunks** (18 D1 statements, leaving room for purge and deliveries in the same run) is flagged `too_large` and skipped, so one huge page can't stall ingest. If it was stored before, its old chunks stay and its etag isn't updated, so it is retried on each scheduled run and the error stays visible; an ingest run that makes no progress for 5 alarm runs fails and backs off.
 14. **Question ids are 128 random bits** (`q_…`), and `POST /v1/feedback` is rate limited like questions.
 
 ## Couldn't verify (2026-11-12)
