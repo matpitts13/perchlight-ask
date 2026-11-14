@@ -1,0 +1,53 @@
+{
+  "name": "perchlight-ask",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A free, self-hosted ask-the-docs widget and API, plus AI-drafted support inbox replies, on Cloudflare Workers + Workers AI + Vectorize + D1 + one Durable Object. No cron trigger.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "test": "vitest run",
+    "hash-key": "node scripts/hash-key.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ADMIN_TOKEN": {
+        "description": "Required. A long random string (16+ characters), e.g. from `openssl rand -hex 32`. Protects the admin API (/api/*)."
+      },
+      "SESSION_SECRET": {
+        "description": "Required for the widget. 16+ random characters. Signs widget session tokens."
+      },
+      "IP_SALT": {
+        "description": "Required for the widget. 16+ random characters. Hashes visitor IP addresses (with the UTC date) for rate limits; raw IPs are never stored."
+      },
+      "TURNSTILE_SECRET": {
+        "description": "Required for the widget. The secret key of a Cloudflare Turnstile widget whose hostnames are your sites."
+      },
+      "ASK_API_KEYS": {
+        "description": "Optional. JSON: name to {\"hash\":\"<npm run hash-key output>\",\"daily\":500}, for POST /v1/ask from your own apps with X-Api-Key."
+      },
+      "SITE_PROOF": {
+        "description": "Needed for sitemap sources. 16+ random characters; serve it at https://<your-host>/.well-known/perchlight-ask.txt to prove the host is yours."
+      },
+      "GITHUB_TOKEN": {
+        "description": "Optional. A fine-grained GitHub token with read-only Contents access on your docs repo (needed for private repos; raises the API limit for public ones)."
+      },
+      "GITHUB_WEBHOOK_SECRET": {
+        "description": "Optional. The secret of a GitHub push webhook to /v1/hooks/github, which starts a re-ingest early."
+      },
+      "RESEND_API_KEY": {
+        "description": "Optional, off by default. Only used when NOTIFY_PROVIDER=resend or INBOX_SEND=resend."
+      }
+    }
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.6.1",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.159.0"
+  }
+}

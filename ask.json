@@ -1,0 +1,17 @@
+{
+  "name": "My Product",
+  "contact": "Still stuck? Email support@example.com.",
+  "sources": [
+    {
+      "id": "docs",
+      "kind": "github",
+      "repo": "your-github-user/your-repo",
+      "branch": "main",
+      "path": "docs",
+      "every": "1d",
+      "paused": true
+    }
+  ],
+  "inbox": { "enabled": false, "dailyCap": 50, "ownAddresses": [] },
+  "retentionDays": 30
+}

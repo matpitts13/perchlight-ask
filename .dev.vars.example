@@ -1,0 +1,26 @@
+# Copy to .dev.vars for local development (`npm run dev`). Never commit .dev.vars.
+# In production, set each one with:  npx wrangler secret put <NAME>
+
+# Required. 16+ random characters (openssl rand -hex 32). Protects /api/*.
+ADMIN_TOKEN=
+
+# Required for the widget: 16+ random characters each.
+SESSION_SECRET=
+IP_SALT=
+# Required for the widget: the secret key of your Turnstile widget.
+TURNSTILE_SECRET=
+
+# Optional. Apps calling POST /v1/ask with X-Api-Key. Hash each key with `npm run hash-key -- <key>`.
+# ASK_API_KEYS={"my-app":{"hash":"<hex>","daily":500}}
+
+# Needed for sitemap sources: served at https://<host>/.well-known/perchlight-ask.txt
+# SITE_PROOF=
+
+# Optional. Fine-grained, read-only Contents access to your docs repo.
+# GITHUB_TOKEN=
+
+# Optional. The secret of a GitHub push webhook to /v1/hooks/github.
+# GITHUB_WEBHOOK_SECRET=
+
+# Optional, off by default. Only used with NOTIFY_PROVIDER=resend or INBOX_SEND=resend.
+# RESEND_API_KEY=

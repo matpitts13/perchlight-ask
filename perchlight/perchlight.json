@@ -1,0 +1,113 @@
+{
+  "$schema": "https://perchlight.ravenburst.com/schema/v1.json",
+  "version": 1,
+  "views": [
+    {
+      "id": "ask-sources",
+      "title": "Sources",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "sources" },
+      "columns": [
+        { "label": "Source", "from": "id" },
+        { "label": "Kind", "from": "kind", "type": "enum", "options": ["github", "sitemap", "upload"] },
+        { "label": "Location", "from": "location" },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["new", "running", "ok", "failed", "paused", "paused_budget", "unverified", "config_error", "removed"] },
+        { "label": "Docs", "from": "docs", "type": "number" },
+        { "label": "Chunks", "from": "chunks", "type": "number" },
+        { "label": "Next run (ms)", "from": "next_at", "type": "number", "hidden": true },
+        { "label": "Ownership proof seen", "from": "verified_at", "type": "number", "hidden": true },
+        { "label": "Failures in a row", "from": "fail_count", "type": "number" },
+        { "label": "Last error", "from": "last_error" },
+        { "label": "Last run", "from": "last_run_id", "hidden": true },
+        { "label": "Requested", "from": "requested_action", "hidden": true }
+      ],
+      "actions": [
+        { "label": "Re-ingest now", "set": { "requested_action": "reingest" } },
+        { "label": "Pause", "confirm": true, "set": { "requested_action": "pause" } },
+        { "label": "Resume", "set": { "requested_action": "resume" } }
+      ]
+    },
+    {
+      "id": "ask-runs",
+      "title": "Ingest runs",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "ingest_runs" },
+      "columns": [
+        { "label": "Started (ms)", "from": "started_at", "type": "number" },
+        { "label": "Source", "from": "source_id" },
+        { "label": "Result", "from": "status", "type": "enum", "options": ["running", "ok", "failed", "paused_budget"] },
+        { "label": "Progress (%)", "from": "progress", "type": "number" },
+        { "label": "Docs seen", "from": "docs_seen", "type": "number" },
+        { "label": "Docs changed", "from": "docs_changed", "type": "number" },
+        { "label": "Chunks embedded", "from": "chunks_embedded", "type": "number" },
+        { "label": "Neurons", "from": "neurons", "type": "number" },
+        { "label": "Error", "from": "error" }
+      ]
+    },
+    {
+      "id": "ask-questions",
+      "title": "Questions",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "asks" },
+      "columns": [
+        { "label": "At (ms)", "from": "at", "type": "number" },
+        { "label": "Question", "from": "question" },
+        { "label": "Confidence (none = I don't know)", "from": "confidence", "type": "enum", "options": ["high", "low", "none"] },
+        { "label": "Mode", "from": "mode", "type": "enum", "options": ["full", "lean", "search", "cache"] },
+        { "label": "Helpful", "from": "helpful", "type": "boolean" },
+        { "label": "Neurons", "from": "neurons", "type": "number" },
+        { "label": "From", "from": "origin" },
+        { "label": "Answer", "from": "answer", "hidden": true },
+        { "label": "Chunks", "from": "chunk_ids", "type": "json", "hidden": true }
+      ],
+      "actions": [{ "label": "Delete", "confirm": true, "delete": true }]
+    },
+    {
+      "id": "ask-drafts",
+      "title": "Drafts",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "drafts" },
+      "columns": [
+        { "label": "From", "from": "from_addr" },
+        { "label": "Subject", "from": "subject" },
+        { "label": "Confidence", "from": "confidence", "type": "enum", "options": ["high", "low", "none"] },
+        { "label": "Needs you", "from": "needs_you", "type": "boolean" },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["new", "approved", "sending", "sent", "discarded"] },
+        { "label": "Warning (a pattern flag, not a defence)", "from": "flags" },
+        { "label": "Draft (copy this)", "from": "body", "hidden": true },
+        { "label": "Reply in your mail app", "from": "mailto", "hidden": true },
+        { "label": "Sources", "from": "sources", "type": "json", "hidden": true },
+        { "label": "Send result", "from": "send_result", "hidden": true },
+        { "label": "Requested", "from": "requested_action", "hidden": true }
+      ],
+      "actions": [
+        { "label": "Approve", "confirm": true, "set": { "requested_action": "approve" } },
+        { "label": "Discard", "confirm": true, "set": { "requested_action": "discard" } }
+      ]
+    },
+    {
+      "id": "ask-emails",
+      "title": "Support mail",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "emails" },
+      "columns": [
+        { "label": "Received (ms)", "from": "received_at", "type": "number" },
+        { "label": "From", "from": "from_addr" },
+        { "label": "Subject", "from": "subject" },
+        { "label": "Status (unparsed = open in your inbox)", "from": "status", "type": "enum", "options": ["queued", "drafted", "skipped", "unparsed", "failed"] },
+        { "label": "Skipped because", "from": "skip_reason" },
+        { "label": "Warning", "from": "flags" },
+        { "label": "Email (trimmed)", "from": "body", "hidden": true }
+      ]
+    },
+    {
+      "id": "ask-budget",
+      "title": "Budget",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "budget_days" },
+      "columns": [
+        { "label": "Day (UTC)", "from": "day" },
+        { "label": "Neurons used (of 10,000; we stop at 9,500)", "from": "used", "type": "number" },
+        { "label": "Questions", "from": "questions", "type": "number" },
+        { "label": "Inbox", "from": "inbox", "type": "number" },
+        { "label": "Ingest", "from": "ingest", "type": "number" },
+        { "label": "Mode now", "from": "mode", "type": "enum", "options": ["full", "lean", "search"] },
+        { "label": "Workers AI refused (search only until 00:00 UTC)", "from": "exhausted", "type": "boolean" }
+      ]
+    }
+  ]
+}

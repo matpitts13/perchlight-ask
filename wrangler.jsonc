@@ -1,0 +1,75 @@
+// perchlight-ask: one Worker + D1 + one Vectorize index + Workers AI + one
+// small Durable Object (the Keeper). Secrets are never set here. Locally they
+// go in .dev.vars (see .dev.vars.example); in production:
+//   npx wrangler secret put <NAME>
+// Your own copy with real ids can live in wrangler.mine.jsonc (gitignored):
+//   npx wrangler deploy -c wrangler.mine.jsonc
+//
+// No cron trigger, on purpose: ingest, drafts, owner digests and the daily
+// retention purge are all timed by the Keeper Durable Object's alarm, which
+// any request re-arms if it ever stops (docs/SDD.md, "Pieces").
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "perchlight-ask",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "perchlight-ask",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Workers AI: 10,000 neurons a day on Free. The Keeper's ledger keeps this
+  // deployment under 9,500 (lower ASK_NEURON_CAP if other Workers use AI).
+  "ai": { "binding": "AI" },
+
+  // npx wrangler vectorize create ask-chunks --dimensions=384 --metric=cosine
+  "vectorize": [{ "binding": "VECTORIZE", "index_name": "ask-chunks" }],
+
+  // Owner digests to your own verified address (Email Routing > Destination
+  // addresses). Free on all plans.
+  "send_email": [{ "name": "EMAIL" }],
+
+  // Durable Objects on the Free plan need the SQLite backend. One instance.
+  "durable_objects": {
+    "bindings": [{ "name": "KEEPER", "class_name": "Keeper" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Keeper"] }],
+
+  "vars": {
+    // This deployment's public URL, e.g. https://ask.example.com (ingest never fetches it).
+    "PUBLIC_URL": "",
+    // The sites the widget may run on, comma-separated: "https://example.com, https://docs.example.com".
+    "ALLOWED_ORIGINS": "",
+    // Inbox mode (ask.json "inbox.enabled"): your real, verified inbox. Mail is forwarded there first.
+    "FORWARD_TO": "",
+    // An address on a domain with Email Routing on; owner digests come from it.
+    "MAIL_FROM": "",
+    // Signed at the end of drafts.
+    "INBOX_SIGNATURE": "",
+    // "resend" turns on Approve & send through Resend (off by default; open question 1).
+    "INBOX_SEND": "",
+    // From address for approved replies through Resend (defaults to MAIL_FROM).
+    "INBOX_FROM": "",
+    // "resend" sends owner digests through Resend instead of send_email.
+    "NOTIFY_PROVIDER": "",
+    // "0" turns question logging off entirely.
+    "LOG_QUESTIONS": "1",
+    "RETENTION_DAYS": "30",
+    "ASK_DAILY_CAP": "1000",
+    // Lower than 9500 if other Workers on this account use Workers AI.
+    "ASK_NEURON_CAP": "9500",
+    // Optional: e.g. "@cf/meta/llama-3.2-1b-instruct" for more, weaker answers.
+    "AI_MODEL": "",
+    // Optional: an AI Gateway id (free analytics, caching, rate limiting).
+    "AI_GATEWAY_ID": "",
+    // Optional: a URL fetched after Keeper runs (at most every 5 minutes), e.g. a perchlight-hooks ping URL.
+    "HEARTBEAT_URL": ""
+  }
+
+  // Your own domain, once it works on workers.dev:
+  // "routes": [{ "pattern": "ask.example.com", "custom_domain": true }]
+}

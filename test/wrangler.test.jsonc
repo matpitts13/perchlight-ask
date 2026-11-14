@@ -1,0 +1,11 @@
+// The tests' bindings: wrangler.jsonc without Workers AI and Vectorize (tests
+// pass in-memory fakes, so nothing ever reaches a Cloudflare account).
+{
+  "name": "perchlight-ask-test",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-01",
+  "d1_databases": [{ "binding": "DB", "database_name": "perchlight-ask", "migrations_dir": "../migrations" }],
+  "send_email": [{ "name": "EMAIL" }],
+  "durable_objects": { "bindings": [{ "name": "KEEPER", "class_name": "Keeper" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Keeper"] }]
+}
